@@ -4,9 +4,15 @@ const { getDatabase } = require("firebase-admin/database");
 const http = require("http"); // Minimal HTTP server for Render
 
 // ----------------------------
-// 1️⃣ Firebase Admin Init
+// 1️⃣ Firebase Admin Init using ENV variable
 // ----------------------------
-const serviceAccount = require("./serviceAccountKey.json"); // Keep it secret
+if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
+  console.error("❌ FIREBASE_SERVICE_ACCOUNT env variable not set!");
+  process.exit(1);
+}
+
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
   databaseURL: "https://lamedtelemedicine-default-rtdb.europe-west1.firebasedatabase.app/",
@@ -37,7 +43,6 @@ const sendNotificationViaWorker = async (playerId, title, message) => {
 // 3️⃣ Firebase Realtime Listeners
 // ----------------------------
 
-// Helper to ignore old data
 const createChildAddedListener = (ref, callback) => {
   let loaded = false;
   ref.once("value", () => (loaded = true));
@@ -51,7 +56,6 @@ const createChildAddedListener = (ref, callback) => {
 
 // Appointments
 createChildAddedListener(db.ref("/appointments"), async (appointment) => {
-  // Notify doctor
   if (appointment.doctorId) {
     const snap = await db.ref(`/users/${appointment.doctorId}/oneSignalPlayerId`).once("value");
     const playerId = snap.val();
@@ -63,7 +67,6 @@ createChildAddedListener(db.ref("/appointments"), async (appointment) => {
       );
     }
   }
-  // Notify patient
   if (appointment.patientId) {
     const snap = await db.ref(`/users/${appointment.patientId}/oneSignalPlayerId`).once("value");
     const playerId = snap.val();
@@ -149,5 +152,4 @@ http
   })
   .listen(PORT, () => console.log(`🌐 Web service listening on port ${PORT}`));
 
-// ----------------------------
 console.log("👂 Listening to Firebase Realtime Database...");
