@@ -1,39 +1,31 @@
-// index.js
 const admin = require("firebase-admin");
-const fetch = require("node-fetch"); // Needed for Cloudflare Worker
+const fetch = require("node-fetch"); // For Cloudflare Worker calls
 const { getDatabase } = require("firebase-admin/database");
+const http = require("http"); // Minimal HTTP server for Render
 
-// ------------------------
-// ⚡ Firebase Admin Init via Env Vars
-// ------------------------
-const serviceAccount = JSON.parse(process.env.SERVICE_ACCOUNT_KEY);
-const databaseURL = process.env.FIREBASE_DATABASE_URL;
-
+// ----------------------------
+// 1️⃣ Firebase Admin Init
+// ----------------------------
+const serviceAccount = require("./serviceAccountKey.json"); // Keep it secret
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
-  databaseURL,
+  databaseURL: "https://lamedtelemedicine-default-rtdb.europe-west1.firebasedatabase.app/",
 });
 
 const db = getDatabase();
+const WORKER_URL = "https://lamed-notifierr.medatesfe21.workers.dev";
 
-// ------------------------
-// 🔔 Cloudflare Worker URL
-// ------------------------
-const WORKER_URL = process.env.WORKER_URL;
-
-// ------------------------
-// Helper: Send notification via Worker
-// ------------------------
+// ----------------------------
+// 2️⃣ Helper to send notifications via Worker
+// ----------------------------
 const sendNotificationViaWorker = async (playerId, title, message) => {
   if (!playerId) return;
-
   try {
     const response = await fetch(WORKER_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ playerId, title, body: message }),
     });
-
     const result = await response.json();
     console.log(`✅ Notification sent to ${playerId}:`, result);
   } catch (error) {
@@ -41,40 +33,24 @@ const sendNotificationViaWorker = async (playerId, title, message) => {
   }
 };
 
-// ------------------------
-// ✅ Utility to ignore old data
-// ------------------------
-const createChildListener = (ref, callback) => {
-  let loaded = false;
-  ref.once("value", () => {
-    loaded = true;
-  });
+// ----------------------------
+// 3️⃣ Firebase Realtime Listeners
+// ----------------------------
 
+// Helper to ignore old data
+const createChildAddedListener = (ref, callback) => {
+  let loaded = false;
+  ref.once("value", () => (loaded = true));
   ref.on("child_added", async (snapshot) => {
-    if (!loaded) return; // Ignore old data
-    await callback(snapshot);
+    if (!loaded) return; // Ignore historical data
+    const data = snapshot.val();
+    if (!data) return;
+    await callback(data);
   });
 };
 
-const createChildChangedListener = (ref, callback) => {
-  let loaded = false;
-  ref.once("value", () => {
-    loaded = true;
-  });
-
-  ref.on("child_changed", async (snapshot) => {
-    if (!loaded) return;
-    await callback(snapshot);
-  });
-};
-
-// ------------------------
-// 1️⃣ Appointments
-// ------------------------
-createChildListener(db.ref("/appointments"), async (snapshot) => {
-  const appointment = snapshot.val();
-  if (!appointment) return;
-
+// Appointments
+createChildAddedListener(db.ref("/appointments"), async (appointment) => {
   // Notify doctor
   if (appointment.doctorId) {
     const snap = await db.ref(`/users/${appointment.doctorId}/oneSignalPlayerId`).once("value");
@@ -87,7 +63,6 @@ createChildListener(db.ref("/appointments"), async (snapshot) => {
       );
     }
   }
-
   // Notify patient
   if (appointment.patientId) {
     const snap = await db.ref(`/users/${appointment.patientId}/oneSignalPlayerId`).once("value");
@@ -102,13 +77,9 @@ createChildListener(db.ref("/appointments"), async (snapshot) => {
   }
 });
 
-// ------------------------
-// 2️⃣ Prescriptions
-// ------------------------
-createChildListener(db.ref("/prescriptions"), async (snapshot) => {
-  const prescription = snapshot.val();
+// Prescriptions
+createChildAddedListener(db.ref("/prescriptions"), async (prescription) => {
   if (!prescription || !prescription.patientId) return;
-
   const snap = await db.ref(`/users/${prescription.patientId}/oneSignalPlayerId`).once("value");
   const playerId = snap.val();
   if (playerId) {
@@ -120,32 +91,24 @@ createChildListener(db.ref("/prescriptions"), async (snapshot) => {
   }
 });
 
-// ------------------------
-// 3️⃣ Chat Messages
-// ------------------------
-createChildListener(db.ref("/chats"), async (snapshot) => {
-  snapshot.forEach(async (msgSnap) => {
-    const message = msgSnap.val();
-    if (!message || !message.toUserId) return;
-
+// Chat Messages
+createChildAddedListener(db.ref("/chats"), async (chatSnapshot) => {
+  for (const msgId in chatSnapshot) {
+    const message = chatSnapshot[msgId];
+    if (!message || !message.toUserId) continue;
     const snap = await db.ref(`/users/${message.toUserId}/oneSignalPlayerId`).once("value");
     const playerId = snap.val();
-    if (!playerId) return;
-
-    let text = message.text || "";
-    if (message.fileUrl) text = "📎 Sent you a new file";
-
-    await sendNotificationViaWorker(playerId, "💬 New Message", text);
-  });
+    if (playerId) {
+      let text = message.text || "";
+      if (message.fileUrl) text = "📎 Sent you a new file";
+      await sendNotificationViaWorker(playerId, "💬 New Message", text);
+    }
+  }
 });
 
-// ------------------------
-// 4️⃣ Lab Results
-// ------------------------
-createChildListener(db.ref("/lab_requests"), async (snapshot) => {
-  const lab = snapshot.val();
+// Lab Results
+createChildAddedListener(db.ref("/lab_requests"), async (lab) => {
   if (!lab || !lab.patientId) return;
-
   const snap = await db.ref(`/users/${lab.patientId}/oneSignalPlayerId`).once("value");
   const playerId = snap.val();
   if (playerId) {
@@ -157,13 +120,13 @@ createChildListener(db.ref("/lab_requests"), async (snapshot) => {
   }
 });
 
-// ------------------------
-// 5️⃣ Payment Updates
-// ------------------------
-createChildChangedListener(db.ref("/payments"), async (snapshot) => {
+// Payment Updates
+let paymentsLoaded = false;
+db.ref("/payments").once("value", () => (paymentsLoaded = true));
+db.ref("/payments").on("child_changed", async (snapshot) => {
+  if (!paymentsLoaded) return;
   const payment = snapshot.val();
   if (!payment || !payment.patientId) return;
-
   const snap = await db.ref(`/users/${payment.patientId}/oneSignalPlayerId`).once("value");
   const playerId = snap.val();
   if (playerId) {
@@ -175,4 +138,16 @@ createChildChangedListener(db.ref("/payments"), async (snapshot) => {
   }
 });
 
+// ----------------------------
+// 4️⃣ Minimal HTTP server for Render free Web Service
+// ----------------------------
+const PORT = process.env.PORT || 3000;
+http
+  .createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("Firebase listener is running.\n");
+  })
+  .listen(PORT, () => console.log(`🌐 Web service listening on port ${PORT}`));
+
+// ----------------------------
 console.log("👂 Listening to Firebase Realtime Database...");
