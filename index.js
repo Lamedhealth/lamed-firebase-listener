@@ -1,19 +1,29 @@
 // index.js
 const admin = require("firebase-admin");
-const fetch = require("node-fetch"); // Needed for Cloudflare Worker call
+const fetch = require("node-fetch"); // Needed for Cloudflare Worker
 const { getDatabase } = require("firebase-admin/database");
 
-// Initialize Firebase Admin SDK
-const serviceAccount = require("./serviceAccountKey.json");
+// ------------------------
+// ⚡ Firebase Admin Init via Env Vars
+// ------------------------
+const serviceAccount = JSON.parse(process.env.SERVICE_ACCOUNT_KEY);
+const databaseURL = process.env.FIREBASE_DATABASE_URL;
+
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
-  databaseURL: "https://lamedtelemedicine-default-rtdb.europe-west1.firebasedatabase.app/",
+  databaseURL,
 });
 
 const db = getDatabase();
-const WORKER_URL = "https://lamed-notifierr.medatesfe21.workers.dev";
 
-// ✅ Helper: Send notification via Cloudflare Worker
+// ------------------------
+// 🔔 Cloudflare Worker URL
+// ------------------------
+const WORKER_URL = process.env.WORKER_URL;
+
+// ------------------------
+// Helper: Send notification via Worker
+// ------------------------
 const sendNotificationViaWorker = async (playerId, title, message) => {
   if (!playerId) return;
 
@@ -31,23 +41,41 @@ const sendNotificationViaWorker = async (playerId, title, message) => {
   }
 };
 
-// -----------------------------------------
+// ------------------------
+// ✅ Utility to ignore old data
+// ------------------------
+const createChildListener = (ref, callback) => {
+  let loaded = false;
+  ref.once("value", () => {
+    loaded = true;
+  });
+
+  ref.on("child_added", async (snapshot) => {
+    if (!loaded) return; // Ignore old data
+    await callback(snapshot);
+  });
+};
+
+const createChildChangedListener = (ref, callback) => {
+  let loaded = false;
+  ref.once("value", () => {
+    loaded = true;
+  });
+
+  ref.on("child_changed", async (snapshot) => {
+    if (!loaded) return;
+    await callback(snapshot);
+  });
+};
+
+// ------------------------
 // 1️⃣ Appointments
-// -----------------------------------------
-const appointmentsRef = db.ref("/appointments");
-let appointmentsLoaded = false;
-
-appointmentsRef.once("value", () => {
-  appointmentsLoaded = true;
-});
-
-appointmentsRef.on("child_added", async (snapshot) => {
-  if (!appointmentsLoaded) return; // 🚫 Ignore old data
-
+// ------------------------
+createChildListener(db.ref("/appointments"), async (snapshot) => {
   const appointment = snapshot.val();
   if (!appointment) return;
 
-  // 🧑‍⚕️ Notify doctor
+  // Notify doctor
   if (appointment.doctorId) {
     const snap = await db.ref(`/users/${appointment.doctorId}/oneSignalPlayerId`).once("value");
     const playerId = snap.val();
@@ -60,7 +88,7 @@ appointmentsRef.on("child_added", async (snapshot) => {
     }
   }
 
-  // 🧍‍♀️ Notify patient
+  // Notify patient
   if (appointment.patientId) {
     const snap = await db.ref(`/users/${appointment.patientId}/oneSignalPlayerId`).once("value");
     const playerId = snap.val();
@@ -74,25 +102,15 @@ appointmentsRef.on("child_added", async (snapshot) => {
   }
 });
 
-// -----------------------------------------
+// ------------------------
 // 2️⃣ Prescriptions
-// -----------------------------------------
-const prescriptionsRef = db.ref("/prescriptions");
-let prescriptionsLoaded = false;
-
-prescriptionsRef.once("value", () => {
-  prescriptionsLoaded = true;
-});
-
-prescriptionsRef.on("child_added", async (snapshot) => {
-  if (!prescriptionsLoaded) return;
-
+// ------------------------
+createChildListener(db.ref("/prescriptions"), async (snapshot) => {
   const prescription = snapshot.val();
   if (!prescription || !prescription.patientId) return;
 
   const snap = await db.ref(`/users/${prescription.patientId}/oneSignalPlayerId`).once("value");
   const playerId = snap.val();
-
   if (playerId) {
     await sendNotificationViaWorker(
       playerId,
@@ -102,54 +120,34 @@ prescriptionsRef.on("child_added", async (snapshot) => {
   }
 });
 
-// -----------------------------------------
+// ------------------------
 // 3️⃣ Chat Messages
-// -----------------------------------------
-const chatsRef = db.ref("/chats");
-let chatsLoaded = false;
-
-chatsRef.once("value", () => {
-  chatsLoaded = true;
-});
-
-chatsRef.on("child_changed", async (snapshot) => {
-  if (!chatsLoaded) return;
-
+// ------------------------
+createChildListener(db.ref("/chats"), async (snapshot) => {
   snapshot.forEach(async (msgSnap) => {
     const message = msgSnap.val();
     if (!message || !message.toUserId) return;
 
     const snap = await db.ref(`/users/${message.toUserId}/oneSignalPlayerId`).once("value");
     const playerId = snap.val();
+    if (!playerId) return;
 
-    if (playerId) {
-      let text = message.text || "";
-      if (message.fileUrl) text = "📎 Sent you a new file";
+    let text = message.text || "";
+    if (message.fileUrl) text = "📎 Sent you a new file";
 
-      await sendNotificationViaWorker(playerId, "💬 New Message", text);
-    }
+    await sendNotificationViaWorker(playerId, "💬 New Message", text);
   });
 });
 
-// -----------------------------------------
+// ------------------------
 // 4️⃣ Lab Results
-// -----------------------------------------
-const labRef = db.ref("/lab_requests");
-let labsLoaded = false;
-
-labRef.once("value", () => {
-  labsLoaded = true;
-});
-
-labRef.on("child_added", async (snapshot) => {
-  if (!labsLoaded) return;
-
+// ------------------------
+createChildListener(db.ref("/lab_requests"), async (snapshot) => {
   const lab = snapshot.val();
   if (!lab || !lab.patientId) return;
 
   const snap = await db.ref(`/users/${lab.patientId}/oneSignalPlayerId`).once("value");
   const playerId = snap.val();
-
   if (playerId) {
     await sendNotificationViaWorker(
       playerId,
@@ -159,25 +157,15 @@ labRef.on("child_added", async (snapshot) => {
   }
 });
 
-// -----------------------------------------
+// ------------------------
 // 5️⃣ Payment Updates
-// -----------------------------------------
-const paymentsRef = db.ref("/payments");
-let paymentsLoaded = false;
-
-paymentsRef.once("value", () => {
-  paymentsLoaded = true;
-});
-
-paymentsRef.on("child_changed", async (snapshot) => {
-  if (!paymentsLoaded) return;
-
+// ------------------------
+createChildChangedListener(db.ref("/payments"), async (snapshot) => {
   const payment = snapshot.val();
   if (!payment || !payment.patientId) return;
 
   const snap = await db.ref(`/users/${payment.patientId}/oneSignalPlayerId`).once("value");
   const playerId = snap.val();
-
   if (playerId) {
     await sendNotificationViaWorker(
       playerId,
@@ -187,5 +175,4 @@ paymentsRef.on("child_changed", async (snapshot) => {
   }
 });
 
-// -----------------------------------------
 console.log("👂 Listening to Firebase Realtime Database...");
