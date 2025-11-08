@@ -1,5 +1,5 @@
 const admin = require("firebase-admin");
-const fetch = require("node-fetch"); // Cloudflare Worker calls
+const fetch = require("node-fetch");
 const { getDatabase } = require("firebase-admin/database");
 const http = require("http");
 
@@ -68,8 +68,7 @@ const notifyUser = async (userId, title, message) => {
 // ----------------------------
 const createChildAddedListener = (ref, callback) => {
   let loaded = false;
-  ref.once("value", () => (loaded = true));
-
+  ref.once("value").then(() => (loaded = true));
   ref.on("child_added", async (snapshot) => {
     if (!loaded) return; // ignore old data
     const data = snapshot.val();
@@ -101,7 +100,7 @@ createChildAddedListener(db.ref("/appointments"), async (appointment) => {
 });
 
 // ----------------------------
-// Prescriptions & Lab Requests (per user, ignore old)
+// Prescriptions & Lab Requests (per user)
 // ----------------------------
 const setupUserFilesListener = (type) => {
   db.ref("/patient_files").on("child_added", (userSnap) => {
@@ -125,11 +124,15 @@ setupUserFilesListener("lab_requests");
 db.ref("/chats").on("child_added", (chatSnap) => {
   const chatId = chatSnap.key;
   const messagesRef = db.ref(`/chats/${chatId}/messages`);
+
   createChildAddedListener(messagesRef, async (msg) => {
-    if (!msg || !msg.toUserId) return;
+    if (!msg || !msg.to) return; // <- matches Flutter 'to' field
+    if (msg.from === msg.to) return; // don't notify self
+
     let text = msg.text || "";
     if (msg.fileUrl) text = "📎 Sent you a new file";
-    await notifyUser(msg.toUserId, "💬 New Message", text);
+
+    await notifyUser(msg.to, "💬 New Message", text);
   });
 });
 
@@ -137,7 +140,8 @@ db.ref("/chats").on("child_added", (chatSnap) => {
 // Payment Updates
 // ----------------------------
 let paymentsLoaded = false;
-db.ref("/payments").once("value", () => (paymentsLoaded = true));
+db.ref("/payments").once("value").then(() => (paymentsLoaded = true));
+
 db.ref("/payments").on("child_changed", async (snap) => {
   if (!paymentsLoaded) return;
   const payment = snap.val();
