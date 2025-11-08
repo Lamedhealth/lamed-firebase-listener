@@ -1,3 +1,4 @@
+// index.js
 const admin = require("firebase-admin");
 const fetch = require("node-fetch"); // Cloudflare Worker calls
 const { getDatabase } = require("firebase-admin/database");
@@ -29,16 +30,16 @@ const sendNotificationViaWorker = async (playerId, title, message) => {
     console.warn("⚠️ No playerId provided, skipping notification");
     return;
   }
-  try {
-    const payload = { playerId, title, body: message };
-    console.log("🔹 Sending payload to worker:", payload);
 
+  const payload = { playerId, title, body: message };
+  console.log("🔹 Sending payload to worker:", payload);
+
+  try {
     const response = await fetch(WORKER_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-
     const result = await response.json();
     console.log(`✅ Notification sent to ${playerId}:`, result);
   } catch (error) {
@@ -51,6 +52,7 @@ const sendNotificationViaWorker = async (playerId, title, message) => {
 // ----------------------------
 const getPlayerId = async (userId) => {
   if (!userId) return null;
+
   try {
     const snap = await db.ref(`/users/${userId}/oneSignalPlayerId`).once("value");
     const playerId = snap.val();
@@ -78,14 +80,17 @@ const notifyUser = async (userId, title, message) => {
 const createChildAddedListener = (ref, callback) => {
   let loaded = false;
   ref.once("value", () => (loaded = true));
+
   ref.on("child_added", async (snapshot) => {
     const data = snapshot.val();
     if (!data) return;
+
     if (!loaded) {
       console.log("⚠️ Ignoring old data on startup");
       return;
     }
-    console.log("🔹 New child added at", ref.path.toString(), data);
+
+    console.log("🔹 New child added at", ref.toString(), data);
     await callback(data);
   });
 };
@@ -96,9 +101,10 @@ const createChildAddedListener = (ref, callback) => {
 createChildAddedListener(db.ref("/appointments"), async (appointment) => {
   console.log("📌 New appointment:", appointment);
 
+  const patientName = appointment.patientName || "Patient";
+  const doctorName = appointment.doctorName || "Doctor";
+
   if (appointment.doctorId) {
-    const doctorName = appointment.doctorName || "Doctor";
-    const patientName = appointment.patientName || "Patient";
     await notifyUser(
       appointment.doctorId,
       "🩺 New Appointment Booked",
@@ -107,7 +113,6 @@ createChildAddedListener(db.ref("/appointments"), async (appointment) => {
   }
 
   if (appointment.patientId) {
-    const doctorName = appointment.doctorName || "Doctor";
     await notifyUser(
       appointment.patientId,
       "📅 Appointment Scheduled",
@@ -121,6 +126,7 @@ createChildAddedListener(db.ref("/appointments"), async (appointment) => {
 // ----------------------------
 createChildAddedListener(db.ref("/prescriptions"), async (prescription) => {
   if (!prescription || !prescription.patientId) return;
+
   await notifyUser(
     prescription.patientId,
     "💊 New Prescription",
@@ -148,6 +154,7 @@ createChildAddedListener(db.ref("/chats"), async (chatSnapshot) => {
 // ----------------------------
 createChildAddedListener(db.ref("/lab_requests"), async (lab) => {
   if (!lab || !lab.patientId) return;
+
   await notifyUser(
     lab.patientId,
     "🧪 New Lab Result",
@@ -162,6 +169,7 @@ let paymentsLoaded = false;
 db.ref("/payments").once("value", () => (paymentsLoaded = true));
 db.ref("/payments").on("child_changed", async (snapshot) => {
   if (!paymentsLoaded) return;
+
   const payment = snapshot.val();
   if (!payment || !payment.patientId) return;
 
