@@ -1,4 +1,3 @@
-// index.js
 const admin = require("firebase-admin");
 const fetch = require("node-fetch"); // Cloudflare Worker calls
 const { getDatabase } = require("firebase-admin/database");
@@ -26,13 +25,20 @@ const WORKER_URL = "https://lamed-notifierr.medatesfe21.workers.dev";
 // 2️⃣ Helper: Send notification via Worker
 // ----------------------------
 const sendNotificationViaWorker = async (playerId, title, message) => {
-  if (!playerId) return;
+  if (!playerId) {
+    console.warn("⚠️ No playerId provided, skipping notification");
+    return;
+  }
   try {
+    const payload = { playerId, title, body: message };
+    console.log("🔹 Sending payload to worker:", payload);
+
     const response = await fetch(WORKER_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ playerId, title, body: message }),
+      body: JSON.stringify(payload),
     });
+
     const result = await response.json();
     console.log(`✅ Notification sent to ${playerId}:`, result);
   } catch (error) {
@@ -61,6 +67,7 @@ const getPlayerId = async (userId) => {
 // ----------------------------
 const notifyUser = async (userId, title, message) => {
   const playerId = await getPlayerId(userId);
+  console.log(`🔹 Notifying user ${userId} (Player ID: ${playerId})`);
   if (!playerId) return;
   await sendNotificationViaWorker(playerId, title, message);
 };
@@ -72,42 +79,58 @@ const createChildAddedListener = (ref, callback) => {
   let loaded = false;
   ref.once("value", () => (loaded = true));
   ref.on("child_added", async (snapshot) => {
-    if (!loaded) return; // ignore old data
     const data = snapshot.val();
     if (!data) return;
+    if (!loaded) {
+      console.log("⚠️ Ignoring old data on startup");
+      return;
+    }
+    console.log("🔹 New child added at", ref.path.toString(), data);
     await callback(data);
   });
 };
 
+// ----------------------------
 // Appointments
+// ----------------------------
 createChildAddedListener(db.ref("/appointments"), async (appointment) => {
+  console.log("📌 New appointment:", appointment);
+
   if (appointment.doctorId) {
+    const doctorName = appointment.doctorName || "Doctor";
+    const patientName = appointment.patientName || "Patient";
     await notifyUser(
       appointment.doctorId,
       "🩺 New Appointment Booked",
-      `${appointment.patientName} booked a session with you.`
+      `${patientName} booked a session with you.`
     );
   }
+
   if (appointment.patientId) {
+    const doctorName = appointment.doctorName || "Doctor";
     await notifyUser(
       appointment.patientId,
       "📅 Appointment Scheduled",
-      `Your appointment with Dr. ${appointment.doctorName} is scheduled.`
+      `Your appointment with Dr. ${doctorName} is scheduled.`
     );
   }
 });
 
+// ----------------------------
 // Prescriptions
+// ----------------------------
 createChildAddedListener(db.ref("/prescriptions"), async (prescription) => {
   if (!prescription || !prescription.patientId) return;
   await notifyUser(
     prescription.patientId,
     "💊 New Prescription",
-    `Dr. ${prescription.doctorName} uploaded a new prescription for you.`
+    `Dr. ${prescription.doctorName || "Doctor"} uploaded a new prescription for you.`
   );
 });
 
+// ----------------------------
 // Chat Messages
+// ----------------------------
 createChildAddedListener(db.ref("/chats"), async (chatSnapshot) => {
   for (const msgId in chatSnapshot) {
     const message = chatSnapshot[msgId];
@@ -120,17 +143,21 @@ createChildAddedListener(db.ref("/chats"), async (chatSnapshot) => {
   }
 });
 
+// ----------------------------
 // Lab Results
+// ----------------------------
 createChildAddedListener(db.ref("/lab_requests"), async (lab) => {
   if (!lab || !lab.patientId) return;
   await notifyUser(
     lab.patientId,
     "🧪 New Lab Result",
-    `Dr. ${lab.doctorName} uploaded a new lab result for you.`
+    `Dr. ${lab.doctorName || "Doctor"} uploaded a new lab result for you.`
   );
 });
 
+// ----------------------------
 // Payment Updates
+// ----------------------------
 let paymentsLoaded = false;
 db.ref("/payments").once("value", () => (paymentsLoaded = true));
 db.ref("/payments").on("child_changed", async (snapshot) => {
