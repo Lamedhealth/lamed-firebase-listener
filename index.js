@@ -1,7 +1,6 @@
-// index.js
 const admin = require("firebase-admin");
 const fetch = require("node-fetch"); // Cloudflare Worker calls
-const { getDatabase } = require("firebase-admin/database");
+const { getDatabase, ServerValue } = require("firebase-admin/database");
 const http = require("http");
 
 // ----------------------------
@@ -16,7 +15,8 @@ const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
-  databaseURL: "https://lamedtelemedicine-default-rtdb.europe-west1.firebasedatabase.app/",
+  databaseURL:
+    "https://lamedtelemedicine-default-rtdb.europe-west1.firebasedatabase.app/",
 });
 
 const db = getDatabase();
@@ -52,7 +52,6 @@ const sendNotificationViaWorker = async (playerId, title, message) => {
 // ----------------------------
 const getPlayerId = async (userId) => {
   if (!userId) return null;
-
   try {
     const snap = await db.ref(`/users/${userId}/oneSignalPlayerId`).once("value");
     const playerId = snap.val();
@@ -69,7 +68,6 @@ const getPlayerId = async (userId) => {
 // ----------------------------
 const notifyUser = async (userId, title, message) => {
   const playerId = await getPlayerId(userId);
-  console.log(`🔹 Notifying user ${userId} (Player ID: ${playerId})`);
   if (!playerId) return;
   await sendNotificationViaWorker(playerId, title, message);
 };
@@ -84,14 +82,11 @@ const createChildAddedListener = (ref, callback) => {
   ref.on("child_added", async (snapshot) => {
     const data = snapshot.val();
     if (!data) return;
-
     if (!loaded) {
       console.log("⚠️ Ignoring old data on startup");
       return;
     }
-
-    console.log("🔹 New child added at", ref.toString(), data);
-    await callback(data);
+    await callback(data, snapshot.key);
   });
 };
 
@@ -99,67 +94,70 @@ const createChildAddedListener = (ref, callback) => {
 // Appointments
 // ----------------------------
 createChildAddedListener(db.ref("/appointments"), async (appointment) => {
-  console.log("📌 New appointment:", appointment);
-
   const patientName = appointment.patientName || "Patient";
   const doctorName = appointment.doctorName || "Doctor";
 
-  if (appointment.doctorId) {
+  if (appointment.doctorId)
     await notifyUser(
       appointment.doctorId,
       "🩺 New Appointment Booked",
       `${patientName} booked a session with you.`
     );
-  }
 
-  if (appointment.patientId) {
+  if (appointment.patientId)
     await notifyUser(
       appointment.patientId,
       "📅 Appointment Scheduled",
       `Your appointment with Dr. ${doctorName} is scheduled.`
     );
-  }
 });
 
 // ----------------------------
-// Prescriptions
+// Prescriptions (per user path)
 // ----------------------------
-createChildAddedListener(db.ref("/prescriptions"), async (prescription) => {
-  if (!prescription || !prescription.patientId) return;
+db.ref("/patient_files").on("child_added", (userSnap) => {
+  const userId = userSnap.key;
+  db.ref(`/patient_files/${userId}/prescriptions`).on("child_added", async (presSnap) => {
+    const presc = presSnap.val();
+    if (!presc) return;
+    await notifyUser(
+      userId,
+      "💊 New Prescription",
+      `Dr. ${presc.Doctor || "Doctor"} uploaded a new prescription for you.`
+    );
+  });
+});
 
-  await notifyUser(
-    prescription.patientId,
-    "💊 New Prescription",
-    `Dr. ${prescription.doctorName || "Doctor"} uploaded a new prescription for you.`
-  );
+// ----------------------------
+// Lab Requests (per user path)
+// ----------------------------
+db.ref("/patient_files").on("child_added", (userSnap) => {
+  const userId = userSnap.key;
+  db.ref(`/patient_files/${userId}/lab_requests`).on("child_added", async (labSnap) => {
+    const lab = labSnap.val();
+    if (!lab) return;
+    await notifyUser(
+      userId,
+      "🧪 New Lab Result",
+      `Dr. ${lab.Doctor || "Doctor"} uploaded a new lab result for you.`
+    );
+  });
 });
 
 // ----------------------------
 // Chat Messages
 // ----------------------------
-createChildAddedListener(db.ref("/chats"), async (chatSnapshot) => {
-  for (const msgId in chatSnapshot) {
-    const message = chatSnapshot[msgId];
-    if (!message || !message.toUserId) continue;
+db.ref("/chats").on("child_added", (chatSnap) => {
+  const chatId = chatSnap.key;
+  db.ref(`/chats/${chatId}/messages`).on("child_added", async (msgSnap) => {
+    const msg = msgSnap.val();
+    if (!msg || !msg.toUserId) return;
 
-    let text = message.text || "";
-    if (message.fileUrl) text = "📎 Sent you a new file";
+    let text = msg.text || "";
+    if (msg.fileUrl) text = "📎 Sent you a new file";
 
-    await notifyUser(message.toUserId, "💬 New Message", text);
-  }
-});
-
-// ----------------------------
-// Lab Results
-// ----------------------------
-createChildAddedListener(db.ref("/lab_requests"), async (lab) => {
-  if (!lab || !lab.patientId) return;
-
-  await notifyUser(
-    lab.patientId,
-    "🧪 New Lab Result",
-    `Dr. ${lab.doctorName || "Doctor"} uploaded a new lab result for you.`
-  );
+    await notifyUser(msg.toUserId, "💬 New Message", text);
+  });
 });
 
 // ----------------------------
