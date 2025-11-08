@@ -1,10 +1,10 @@
 const admin = require("firebase-admin");
 const fetch = require("node-fetch"); // Cloudflare Worker calls
-const { getDatabase, ServerValue } = require("firebase-admin/database");
+const { getDatabase } = require("firebase-admin/database");
 const http = require("http");
 
 // ----------------------------
-// 1️⃣ Firebase Admin Init using ENV variable
+// 1️⃣ Firebase Admin Init
 // ----------------------------
 if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
   console.error("❌ FIREBASE_SERVICE_ACCOUNT env variable not set!");
@@ -23,48 +23,39 @@ const db = getDatabase();
 const WORKER_URL = "https://lamed-notifierr.medatesfe21.workers.dev";
 
 // ----------------------------
-// 2️⃣ Helper: Send notification via Worker
+// 2️⃣ Send Notification Helper
 // ----------------------------
 const sendNotificationViaWorker = async (playerId, title, message) => {
-  if (!playerId) {
-    console.warn("⚠️ No playerId provided, skipping notification");
-    return;
-  }
-
-  const payload = { playerId, title, body: message };
-  console.log("🔹 Sending payload to worker:", payload);
-
+  if (!playerId) return;
   try {
-    const response = await fetch(WORKER_URL, {
+    const res = await fetch(WORKER_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ playerId, title, body: message }),
     });
-    const result = await response.json();
-    console.log(`✅ Notification sent to ${playerId}:`, result);
-  } catch (error) {
-    console.error("❌ Error sending notification via worker:", error);
+    const data = await res.json();
+    console.log(`✅ Notification sent to ${playerId}`, data);
+  } catch (err) {
+    console.error("❌ Notification error:", err);
   }
 };
 
 // ----------------------------
-// 3️⃣ Helper: Get Player ID from Firebase
+// 3️⃣ Get Player ID
 // ----------------------------
 const getPlayerId = async (userId) => {
   if (!userId) return null;
   try {
     const snap = await db.ref(`/users/${userId}/oneSignalPlayerId`).once("value");
-    const playerId = snap.val();
-    if (!playerId) console.warn(`⚠️ No Player ID found for user ${userId}`);
-    return playerId;
+    return snap.val();
   } catch (e) {
-    console.error(`❌ Error fetching Player ID for user ${userId}:`, e);
+    console.error(`❌ Error fetching Player ID for ${userId}`, e);
     return null;
   }
 };
 
 // ----------------------------
-// 4️⃣ Helper: Notify user
+// 4️⃣ Notify User
 // ----------------------------
 const notifyUser = async (userId, title, message) => {
   const playerId = await getPlayerId(userId);
@@ -73,19 +64,16 @@ const notifyUser = async (userId, title, message) => {
 };
 
 // ----------------------------
-// 5️⃣ Firebase Listeners
+// 5️⃣ Child Added Listener (ignore old data)
 // ----------------------------
 const createChildAddedListener = (ref, callback) => {
   let loaded = false;
   ref.once("value", () => (loaded = true));
 
   ref.on("child_added", async (snapshot) => {
+    if (!loaded) return; // ignore old data
     const data = snapshot.val();
     if (!data) return;
-    if (!loaded) {
-      console.log("⚠️ Ignoring old data on startup");
-      return;
-    }
     await callback(data, snapshot.key);
   });
 };
@@ -113,49 +101,34 @@ createChildAddedListener(db.ref("/appointments"), async (appointment) => {
 });
 
 // ----------------------------
-// Prescriptions (per user path)
+// Prescriptions & Lab Requests (per user, ignore old)
 // ----------------------------
-db.ref("/patient_files").on("child_added", (userSnap) => {
-  const userId = userSnap.key;
-  db.ref(`/patient_files/${userId}/prescriptions`).on("child_added", async (presSnap) => {
-    const presc = presSnap.val();
-    if (!presc) return;
-    await notifyUser(
-      userId,
-      "💊 New Prescription",
-      `Dr. ${presc.Doctor || "Doctor"} uploaded a new prescription for you.`
-    );
+const setupUserFilesListener = (type) => {
+  db.ref("/patient_files").on("child_added", (userSnap) => {
+    const userId = userSnap.key;
+    const ref = db.ref(`/patient_files/${userId}/${type}`);
+    createChildAddedListener(ref, async (item) => {
+      if (!item) return;
+      const title = type === "prescriptions" ? "💊 New Prescription" : "🧪 New Lab Result";
+      const doctorName = item.Doctor || "Doctor";
+      await notifyUser(userId, title, `Dr. ${doctorName} uploaded a new ${type.slice(0, -1)} for you.`);
+    });
   });
-});
+};
 
-// ----------------------------
-// Lab Requests (per user path)
-// ----------------------------
-db.ref("/patient_files").on("child_added", (userSnap) => {
-  const userId = userSnap.key;
-  db.ref(`/patient_files/${userId}/lab_requests`).on("child_added", async (labSnap) => {
-    const lab = labSnap.val();
-    if (!lab) return;
-    await notifyUser(
-      userId,
-      "🧪 New Lab Result",
-      `Dr. ${lab.Doctor || "Doctor"} uploaded a new lab result for you.`
-    );
-  });
-});
+setupUserFilesListener("prescriptions");
+setupUserFilesListener("lab_requests");
 
 // ----------------------------
 // Chat Messages
 // ----------------------------
 db.ref("/chats").on("child_added", (chatSnap) => {
   const chatId = chatSnap.key;
-  db.ref(`/chats/${chatId}/messages`).on("child_added", async (msgSnap) => {
-    const msg = msgSnap.val();
+  const messagesRef = db.ref(`/chats/${chatId}/messages`);
+  createChildAddedListener(messagesRef, async (msg) => {
     if (!msg || !msg.toUserId) return;
-
     let text = msg.text || "";
     if (msg.fileUrl) text = "📎 Sent you a new file";
-
     await notifyUser(msg.toUserId, "💬 New Message", text);
   });
 });
@@ -165,21 +138,15 @@ db.ref("/chats").on("child_added", (chatSnap) => {
 // ----------------------------
 let paymentsLoaded = false;
 db.ref("/payments").once("value", () => (paymentsLoaded = true));
-db.ref("/payments").on("child_changed", async (snapshot) => {
+db.ref("/payments").on("child_changed", async (snap) => {
   if (!paymentsLoaded) return;
-
-  const payment = snapshot.val();
+  const payment = snap.val();
   if (!payment || !payment.patientId) return;
-
-  await notifyUser(
-    payment.patientId,
-    "💰 Payment Update",
-    `Your payment status is now ${payment.status || "updated"}.`
-  );
+  await notifyUser(payment.patientId, "💰 Payment Update", `Your payment status is now ${payment.status || "updated"}.`);
 });
 
 // ----------------------------
-// 6️⃣ Minimal HTTP server for Render free Web Service
+// Minimal HTTP Server
 // ----------------------------
 const PORT = process.env.PORT || 3000;
 http
