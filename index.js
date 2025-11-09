@@ -210,7 +210,8 @@ db.ref("/chats").on("child_added", (chatSnap) => {
 });
 
 // ----------------------------
-// 🔟 Payment Updates
+// ----------------------------
+// 🔟 Payment Updates (fixed for your structure)
 // ----------------------------
 let paymentsLoaded = false;
 db.ref("/payments").once("value").then(() => (paymentsLoaded = true));
@@ -220,12 +221,26 @@ db.ref("/payments").on("child_changed", async (snap) => {
   const payment = snap.val();
   if (!payment || !payment.patientId) return;
 
-  if (payment.status === "approved") {
-    await notifyUser(payment.patientId, "💰 ክፍሊቶም ተቀቢልናዮ ኣለና።", "💰 የቐንየልና! ክፍሊቶም ተቀቢልናዮ ኣለና።");
-  } else if (payment.status === "rejected") {
-    await notifyUser(payment.patientId, "⚠️ ክፍሊቶም ኣይተቀበልናዮን። ንዝህልዎም ቅሬታ በይዘኦም ይደውሉልና 0986203585 / 0914017765");
+  const status = payment.paymentStatus?.toLowerCase() || payment.status?.toLowerCase();
+
+  if (status === "paid" || status === "approved" || status === "confirmed") {
+    await notifyUser(
+      payment.patientId,
+      "💰 ክፍሊቶም ተቀቢልናዮ ኣለና።",
+      "💰 የቐንየልና! ክፍሊቶም ተቀቢልናዮ ኣለና።"
+    );
+  } else if (status === "rejected" || status === "failed" || status === "declined") {
+    await notifyUser(
+      payment.patientId,
+      "⚠️ ክፍሊቶም ኣይተቀበልናዮን።",
+      "ንዝህልዎም ቅሬታ በይዘኦም ይደውሉልና 0986203585 / 0914017765"
+    );
   } else {
-    await notifyUser(payment.patientId, "💰 Payment Update", `Your payment status is now ${payment.status || "updated"}.`);
+    await notifyUser(
+      payment.patientId,
+      "💰 ናይ ክፍሊት ሕቶ",
+      `ናይ ክፍሊቶም ኹነታት፡ ${status || "updated"}`
+    );
   }
 });
 
