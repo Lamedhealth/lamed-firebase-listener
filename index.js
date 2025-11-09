@@ -23,7 +23,15 @@ const db = getDatabase();
 const WORKER_URL = "https://lamed-notifierr.medatesfe21.workers.dev";
 
 // ----------------------------
-// 2️⃣ Send Notification Helper
+// 2️⃣ Global Error Handlers
+// ----------------------------
+process.on("uncaughtException", (err) => console.error("Uncaught Exception:", err));
+process.on("unhandledRejection", (reason, promise) =>
+  console.error("Unhandled Rejection at:", promise, "reason:", reason)
+);
+
+// ----------------------------
+// 3️⃣ Send Notification Helper
 // ----------------------------
 const sendNotificationViaWorker = async (playerId, title, message) => {
   if (!playerId) return;
@@ -41,7 +49,7 @@ const sendNotificationViaWorker = async (playerId, title, message) => {
 };
 
 // ----------------------------
-// 3️⃣ Get Player ID
+// 4️⃣ Get Player ID
 // ----------------------------
 const getPlayerId = async (userId) => {
   if (!userId) return null;
@@ -55,121 +63,132 @@ const getPlayerId = async (userId) => {
 };
 
 // ----------------------------
-// 4️⃣ Notify User
+// 5️⃣ Notify User
 // ----------------------------
 const notifyUser = async (userId, title, message) => {
-  const playerId = await getPlayerId(userId);
-  if (!playerId) return;
-  await sendNotificationViaWorker(playerId, title, message);
+  try {
+    const playerId = await getPlayerId(userId);
+    if (!playerId) return;
+    await sendNotificationViaWorker(playerId, title, message);
+  } catch (err) {
+    console.error("❌ notifyUser error:", err);
+  }
 };
 
 // ----------------------------
-// 5️⃣ Child Added Listener (ignore old data)
+// 6️⃣ Child Added Listener (ignore old data)
 // ----------------------------
 const createChildAddedListener = (ref, callback) => {
   let loaded = false;
   ref.once("value").then(() => (loaded = true));
   ref.on("child_added", async (snapshot) => {
-    if (!loaded) return; // ignore old data
+    if (!loaded) return;
     const data = snapshot.val();
     if (!data) return;
-    await callback(data, snapshot.key);
+    try {
+      await callback(data, snapshot.key);
+    } catch (err) {
+      console.error("❌ child_added listener error:", err);
+    }
   });
 };
 
 // ----------------------------
-// 6️⃣ Appointment Reminder Scheduler (20 & 10 min reminders)
+// 7️⃣ Appointment Reminder Scheduler (20 & 10 min)
 // ----------------------------
 const checkUpcomingAppointments = async () => {
-  const now = Date.now();
-  const twentyMinutes = 20 * 60 * 1000;
-  const tenMinutes = 10 * 60 * 1000;
+  try {
+    const now = Date.now();
+    const twentyMinutes = 20 * 60 * 1000;
+    const tenMinutes = 10 * 60 * 1000;
 
-  const snapshot = await db.ref("/appointments").once("value");
-  snapshot.forEach(async (child) => {
-    const appointment = child.val();
-    if (!appointment || !appointment.timestamp) return;
+    const snapshot = await db.ref("/appointments").once("value");
+    snapshot.forEach(async (child) => {
+      try {
+        const appointment = child.val();
+        if (!appointment || !appointment.timestamp) return;
 
-    const appointmentTime = new Date(appointment.timestamp).getTime();
-    const timeUntil = appointmentTime - now;
+        const appointmentTime = new Date(appointment.timestamp).getTime();
+        const timeUntil = appointmentTime - now;
 
-    // 20-minute reminder
-    if (timeUntil > 0 && timeUntil <= twentyMinutes && !appointment.reminder20Sent) {
-      console.log("⏰ Sending 20-min reminder for:", child.key);
+        // 20-min reminder
+        if (timeUntil > 0 && timeUntil <= twentyMinutes && !appointment.reminder20Sent) {
+          console.log("⏰ Sending 20-min reminder for:", child.key);
+          if (appointment.patientId)
+            await notifyUser(
+              appointment.patientId,
+              "⏰ መዘከሪ ቆፀሮ",
+              "ቆፀርኦም ኣብ ውሽጢ 20 ደቒቓ ክጅምር እዩ። ተዳለው!"
+            );
+          if (appointment.doctorId) {
+            const patientName = appointment.patientName || "your patient";
+            await notifyUser(
+              appointment.doctorId,
+              "🩺 Upcoming Appointment",
+              `Your appointment with ${patientName} starts in 20 minutes.`
+            );
+          }
+          await db.ref(`/appointments/${child.key}`).update({ reminder20Sent: true });
+        }
 
-      if (appointment.patientId) {
-        await notifyUser(
-          appointment.patientId,
-          "⏰ መዘከሪ ቆፀሮ",
-          "ቆፀርኦም ኣብ ውሽጢ 20 ደቒቓ ክጅምር እዩ። ተዳለው!"
-        );
+        // 10-min reminder
+        if (timeUntil > 0 && timeUntil <= tenMinutes && !appointment.reminder10Sent) {
+          console.log("⏰ Sending 10-min reminder for:", child.key);
+          if (appointment.patientId)
+            await notifyUser(
+              appointment.patientId,
+              "⏰ መዘከሪ ቆፀሮ",
+              "ቆፀርኦም ኣብ ውሽጢ 10 ደቒቓ ክጅምር እዩ። ይእተዉ!"
+            );
+          if (appointment.doctorId) {
+            const patientName = appointment.patientName || "your patient";
+            await notifyUser(
+              appointment.doctorId,
+              "🩺 Upcoming Appointment",
+              `Your appointment with ${patientName} starts in 10 minutes. Please get ready.`
+            );
+          }
+          await db.ref(`/appointments/${child.key}`).update({ reminder10Sent: true });
+        }
+      } catch (err) {
+        console.error("❌ Error processing appointment:", err);
       }
-
-      if (appointment.doctorId) {
-        const patientName = appointment.patientName || "your patient";
-        await notifyUser(
-          appointment.doctorId,
-          "🩺 Upcoming Appointment",
-          `Your appointment with ${patientName} starts in 20 minutes.`
-        );
-      }
-
-      await db.ref(`/appointments/${child.key}`).update({ reminder20Sent: true });
-    }
-
-    // 10-minute reminder
-    if (timeUntil > 0 && timeUntil <= tenMinutes && !appointment.reminder10Sent) {
-      console.log("⏰ Sending 10-min reminder for:", child.key);
-
-      if (appointment.patientId) {
-        await notifyUser(
-          appointment.patientId,
-          "⏰ መዘከሪ ቆፀሮ",
-          "ቆፀርኦም ኣብ ውሽጢ 10 ደቒቓ ክጅምር እዩ። ይእተዉ!"
-        );
-      }
-
-      if (appointment.doctorId) {
-        const patientName = appointment.patientName || "your patient";
-        await notifyUser(
-          appointment.doctorId,
-          "🩺 Upcoming Appointment",
-          `Your appointment with ${patientName} starts in 10 minutes. Please get ready.`
-        );
-      }
-
-      await db.ref(`/appointments/${child.key}`).update({ reminder10Sent: true });
-    }
-  });
+    });
+  } catch (err) {
+    console.error("❌ checkUpcomingAppointments error:", err);
+  }
 };
 
-// Run every 1 minute to catch upcoming appointments
 setInterval(checkUpcomingAppointments, 60 * 1000);
 
 // ----------------------------
-// 7️⃣ Appointments Listener
+// 8️⃣ Appointments Listener
 // ----------------------------
 createChildAddedListener(db.ref("/appointments"), async (appointment) => {
-  const patientName = appointment.patientName || "Patient";
-  const doctorName = appointment.doctorName || "Doctor";
+  try {
+    const patientName = appointment.patientName || "Patient";
+    const doctorName = appointment.doctorName || "Doctor";
 
-  if (appointment.doctorId)
-    await notifyUser(
-      appointment.doctorId,
-      "🩺 New Appointment Booked",
-      `${patientName} booked a session with you.`
-    );
+    if (appointment.doctorId)
+      await notifyUser(
+        appointment.doctorId,
+        "🩺 New Appointment Booked",
+        `${patientName} booked a session with you.`
+      );
 
-  if (appointment.patientId)
-    await notifyUser(
-      appointment.patientId,
-      "📅 ሓድሽ ቆፀሮ ሒዞም ኣለዉ",
-      `ቆፀሮ ምስ Dr. ${doctorName} ሒዞም ኣለዉ።`
-    );
+    if (appointment.patientId)
+      await notifyUser(
+        appointment.patientId,
+        "📅 ሓድሽ ቆፀሮ ሒዞም ኣለዉ",
+        `ቆፀሮ ምስ Dr. ${doctorName} ሒዞም ኣለዉ።`
+      );
+  } catch (err) {
+    console.error("❌ Appointments listener error:", err);
+  }
 });
 
 // ----------------------------
-// 8️⃣ Prescriptions & Lab Requests (per user)
+// 9️⃣ Prescriptions & Lab Requests
 // ----------------------------
 const setupUserFilesListener = (type) => {
   db.ref("/patient_files").on("child_added", (userSnap) => {
@@ -177,13 +196,20 @@ const setupUserFilesListener = (type) => {
     const ref = db.ref(`/patient_files/${userId}/${type}`);
     createChildAddedListener(ref, async (item) => {
       if (!item) return;
-      const title = type === "prescriptions" ? "💊 ሓድሽ መድሓኒት ተኣዚዝሎም ኣሎ።" : "🧪 ሓድሽ ምርመራ ተኣዚዝሎም ኣሎ።";
-      const doctorName = item.Doctor || "Doctor";
-      await notifyUser(
-        userId,
-        title,
-        `Dr. ${doctorName} uploaded a new ${type.slice(0, -1)} for you.`
-      );
+      try {
+        const title =
+          type === "prescriptions"
+            ? "💊 ሓድሽ መድሓኒት ተኣዚዝሎም ኣሎ።"
+            : "🧪 ሓድሽ ምርመራ ተኣዚዝሎም ኣሎ።";
+        const doctorName = item.Doctor || "Doctor";
+        await notifyUser(
+          userId,
+          title,
+          `Dr. ${doctorName} uploaded a new ${type.slice(0, -1)} for you.`
+        );
+      } catch (err) {
+        console.error(`❌ Error notifying ${type} for user ${userId}:`, err);
+      }
     });
   });
 };
@@ -192,59 +218,64 @@ setupUserFilesListener("prescriptions");
 setupUserFilesListener("lab_requests");
 
 // ----------------------------
-// 9️⃣ Chat Messages
+// 🔟 Chat Messages
 // ----------------------------
 db.ref("/chats").on("child_added", (chatSnap) => {
   const chatId = chatSnap.key;
   const messagesRef = db.ref(`/chats/${chatId}/messages`);
-
   createChildAddedListener(messagesRef, async (msg) => {
-    if (!msg || !msg.to) return;
-    if (msg.from === msg.to) return; // don't notify self
-
-    let text = msg.text || "";
-    if (msg.fileUrl) text = "📎 ሓድሽ ፋይል ተላኢኽሎም ኣሎ ";
-
-    await notifyUser(msg.to, "💬 ሓድሽ መልእኽቲ", text);
+    if (!msg || !msg.to || msg.from === msg.to) return;
+    try {
+      let text = msg.text || "";
+      if (msg.fileUrl) text = "📎 ሓድሽ ፋይል ተላኢኽሎም ኣሎ ";
+      await notifyUser(msg.to, "💬 ሓድሽ መልእኽቲ", text);
+    } catch (err) {
+      console.error("❌ Chat message notification error:", err);
+    }
   });
 });
 
 // ----------------------------
-// ----------------------------
-// 🔟 Payment Updates (fixed for your structure)
+// 1️⃣1️⃣ Payment Updates
 // ----------------------------
 let appointmentsLoaded = false;
 db.ref("/appointments").once("value").then(() => (appointmentsLoaded = true));
 
 const handlePayment = async (appointment) => {
   if (!appointment || !appointment.patientId) return;
-
-  const status = (appointment.paymentStatus || appointment.status || "").toLowerCase();
-
-  if (status === "paid" || status === "confirmed") {
-    await notifyUser(
-      appointment.patientId,
-      "💰 ክፍሊቶም ተቀቢልናዮ ኣለና።",
-      "💰 የቐንየልና! ክፍሊቶም ተቀቢልናዮ ኣለና።"
-    );
-  } else if (status === "rejected" || status === "failed" || status === "declined") {
-    await notifyUser(
-      appointment.patientId,
-      "⚠️ ክፍሊቶም ኣይተቀበልናዮን።",
-      "ንዝህልዎም ቅሬታ በይዘኦም ይደውሉልና 0986203585 / 0914017765"
-    );
+  try {
+    const status = (appointment.paymentStatus || appointment.status || "").toLowerCase();
+    if (status === "paid" || status === "confirmed") {
+      await notifyUser(
+        appointment.patientId,
+        "💰 ክፍሊቶም ተቀቢልናዮ ኣለና።",
+        "💰 የቐንየልና! ክፍሊቶም ተቀቢልናዮ ኣለና።"
+      );
+    } else if (["rejected", "failed", "declined"].includes(status)) {
+      await notifyUser(
+        appointment.patientId,
+        "⚠️ ክፍሊቶም ኣይተቀበልናዮን።",
+        "ንዝህልዎም ቅሬታ በይዘኦም ይደውሉልና 0986203585 / 0914017765"
+      );
+    }
+  } catch (err) {
+    console.error("❌ Payment notification error:", err);
   }
 };
 
-// Listen for updates to appointment payments
 db.ref("/appointments").on("child_changed", async (snap) => {
   if (!appointmentsLoaded) return;
-  const appointment = snap.val();
-  console.log("💰 Appointment changed:", appointment);
-  await handlePayment(appointment);
+  try {
+    const appointment = snap.val();
+    console.log("💰 Appointment changed:", appointment);
+    await handlePayment(appointment);
+  } catch (err) {
+    console.error("❌ child_changed listener error:", err);
+  }
 });
+
 // ----------------------------
-// 🔹 Minimal HTTP Server
+// 🔹 Minimal HTTP Server (keep alive on Render)
 // ----------------------------
 const PORT = process.env.PORT || 3000;
 http
