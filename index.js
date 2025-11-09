@@ -78,7 +78,76 @@ const createChildAddedListener = (ref, callback) => {
 };
 
 // ----------------------------
-// Appointments
+// 6️⃣ Appointment Reminder Scheduler (20 & 10 min reminders)
+// ----------------------------
+const checkUpcomingAppointments = async () => {
+  const now = Date.now();
+  const twentyMinutes = 20 * 60 * 1000;
+  const tenMinutes = 10 * 60 * 1000;
+
+  const snapshot = await db.ref("/appointments").once("value");
+  snapshot.forEach(async (child) => {
+    const appointment = child.val();
+    if (!appointment || !appointment.timestamp) return;
+
+    const appointmentTime = new Date(appointment.timestamp).getTime();
+    const timeUntil = appointmentTime - now;
+
+    // 20-minute reminder
+    if (timeUntil > 0 && timeUntil <= twentyMinutes && !appointment.reminder20Sent) {
+      console.log("⏰ Sending 20-min reminder for:", child.key);
+
+      if (appointment.patientId) {
+        await notifyUser(
+          appointment.patientId,
+          "⏰ Appointment Reminder",
+          "Your appointment starts in 20 minutes. Please get ready!"
+        );
+      }
+
+      if (appointment.doctorId) {
+        const patientName = appointment.patientName || "your patient";
+        await notifyUser(
+          appointment.doctorId,
+          "🩺 Upcoming Appointment",
+          `Your appointment with ${patientName} starts in 20 minutes.`
+        );
+      }
+
+      await db.ref(`/appointments/${child.key}`).update({ reminder20Sent: true });
+    }
+
+    // 10-minute reminder
+    if (timeUntil > 0 && timeUntil <= tenMinutes && !appointment.reminder10Sent) {
+      console.log("⏰ Sending 10-min reminder for:", child.key);
+
+      if (appointment.patientId) {
+        await notifyUser(
+          appointment.patientId,
+          "⏰ Appointment Reminder",
+          "Your appointment starts in 10 minutes. Please join soon!"
+        );
+      }
+
+      if (appointment.doctorId) {
+        const patientName = appointment.patientName || "your patient";
+        await notifyUser(
+          appointment.doctorId,
+          "🩺 Upcoming Appointment",
+          `Your appointment with ${patientName} starts in 10 minutes. Please get ready.`
+        );
+      }
+
+      await db.ref(`/appointments/${child.key}`).update({ reminder10Sent: true });
+    }
+  });
+};
+
+// Run every 1 minute to catch upcoming appointments
+setInterval(checkUpcomingAppointments, 60 * 1000);
+
+// ----------------------------
+// 7️⃣ Appointments Listener
 // ----------------------------
 createChildAddedListener(db.ref("/appointments"), async (appointment) => {
   const patientName = appointment.patientName || "Patient";
@@ -100,7 +169,7 @@ createChildAddedListener(db.ref("/appointments"), async (appointment) => {
 });
 
 // ----------------------------
-// Prescriptions & Lab Requests (per user)
+// 8️⃣ Prescriptions & Lab Requests (per user)
 // ----------------------------
 const setupUserFilesListener = (type) => {
   db.ref("/patient_files").on("child_added", (userSnap) => {
@@ -110,7 +179,11 @@ const setupUserFilesListener = (type) => {
       if (!item) return;
       const title = type === "prescriptions" ? "💊 New Prescription" : "🧪 New Lab Result";
       const doctorName = item.Doctor || "Doctor";
-      await notifyUser(userId, title, `Dr. ${doctorName} uploaded a new ${type.slice(0, -1)} for you.`);
+      await notifyUser(
+        userId,
+        title,
+        `Dr. ${doctorName} uploaded a new ${type.slice(0, -1)} for you.`
+      );
     });
   });
 };
@@ -119,14 +192,14 @@ setupUserFilesListener("prescriptions");
 setupUserFilesListener("lab_requests");
 
 // ----------------------------
-// Chat Messages
+// 9️⃣ Chat Messages
 // ----------------------------
 db.ref("/chats").on("child_added", (chatSnap) => {
   const chatId = chatSnap.key;
   const messagesRef = db.ref(`/chats/${chatId}/messages`);
 
   createChildAddedListener(messagesRef, async (msg) => {
-    if (!msg || !msg.to) return; // <- matches Flutter 'to' field
+    if (!msg || !msg.to) return;
     if (msg.from === msg.to) return; // don't notify self
 
     let text = msg.text || "";
@@ -137,7 +210,7 @@ db.ref("/chats").on("child_added", (chatSnap) => {
 });
 
 // ----------------------------
-// Payment Updates
+// 🔟 Payment Updates
 // ----------------------------
 let paymentsLoaded = false;
 db.ref("/payments").once("value").then(() => (paymentsLoaded = true));
@@ -146,11 +219,18 @@ db.ref("/payments").on("child_changed", async (snap) => {
   if (!paymentsLoaded) return;
   const payment = snap.val();
   if (!payment || !payment.patientId) return;
-  await notifyUser(payment.patientId, "💰 Payment Update", `Your payment status is now ${payment.status || "updated"}.`);
+
+  if (payment.status === "approved") {
+    await notifyUser(payment.patientId, "💰 Payment Approved", "Your payment has been successfully approved!");
+  } else if (payment.status === "rejected") {
+    await notifyUser(payment.patientId, "⚠️ Payment Rejected", "Your payment was rejected. Please contact support.");
+  } else {
+    await notifyUser(payment.patientId, "💰 Payment Update", `Your payment status is now ${payment.status || "updated"}.`);
+  }
 });
 
 // ----------------------------
-// Minimal HTTP Server
+// 🔹 Minimal HTTP Server
 // ----------------------------
 const PORT = process.env.PORT || 3000;
 http
