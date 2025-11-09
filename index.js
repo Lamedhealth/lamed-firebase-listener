@@ -223,7 +223,7 @@ db.ref("/payments").on("child_changed", async (snap) => {
   if (payment.status === "approved") {
     await notifyUser(payment.patientId, "💰 ክፍሊቶም ተቀቢልናዮ ኣለና።", "💰 የቐንየልና! ክፍሊቶም ተቀቢልናዮ ኣለና።");
   } else if (payment.status === "rejected") {
-    await notifyUser(payment.patientId, "⚠️ ክፍሊቶም ኣይተቀበልናዮን።, "ንዝህልዎም ቅሬታ በይዘኦም ይደውሉልና 09 86 20 35 85/ 09 14 01 77 ");
+    await notifyUser(payment.patientId, "⚠️ ክፍሊቶም ኣይተቀበልናዮን። ንዝህልዎም ቅሬታ በይዘኦም ይደውሉልና 0986203585 / 0914017765");
   } else {
     await notifyUser(payment.patientId, "💰 Payment Update", `Your payment status is now ${payment.status || "updated"}.`);
   }
