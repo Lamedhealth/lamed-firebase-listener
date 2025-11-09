@@ -100,8 +100,8 @@ const checkUpcomingAppointments = async () => {
       if (appointment.patientId) {
         await notifyUser(
           appointment.patientId,
-          "⏰ Appointment Reminder",
-          "Your appointment starts in 20 minutes. Please get ready!"
+          "⏰ መዘከሪ ቆፀሮ",
+          "ቆፀርኦም ኣብ ውሽጢ 20 ደቒቓ ክጅምር እዩ። ተዳለው!"
         );
       }
 
@@ -124,8 +124,8 @@ const checkUpcomingAppointments = async () => {
       if (appointment.patientId) {
         await notifyUser(
           appointment.patientId,
-          "⏰ Appointment Reminder",
-          "Your appointment starts in 10 minutes. Please join soon!"
+          "⏰ መዘከሪ ቆፀሮ",
+          "ቆፀርኦም ኣብ ውሽጢ 10 ደቒቓ ክጅምር እዩ። ይእተዉ!"
         );
       }
 
@@ -163,8 +163,8 @@ createChildAddedListener(db.ref("/appointments"), async (appointment) => {
   if (appointment.patientId)
     await notifyUser(
       appointment.patientId,
-      "📅 Appointment Scheduled",
-      `Your appointment with Dr. ${doctorName} is scheduled.`
+      "📅 ሓድሽ ቆፀሮ ሒዞም ኣለዉ",
+      `ቆፀሮ ምስ Dr. ${doctorName} ሒዞም ኣለዉ።`
     );
 });
 
@@ -177,7 +177,7 @@ const setupUserFilesListener = (type) => {
     const ref = db.ref(`/patient_files/${userId}/${type}`);
     createChildAddedListener(ref, async (item) => {
       if (!item) return;
-      const title = type === "prescriptions" ? "💊 New Prescription" : "🧪 New Lab Result";
+      const title = type === "prescriptions" ? "💊 ሓድሽ መድሓኒት ተኣዚዝሎም ኣሎ።" : "🧪 ሓድሽ ምርመራ ተኣዚዝሎም ኣሎ።";
       const doctorName = item.Doctor || "Doctor";
       await notifyUser(
         userId,
@@ -203,9 +203,9 @@ db.ref("/chats").on("child_added", (chatSnap) => {
     if (msg.from === msg.to) return; // don't notify self
 
     let text = msg.text || "";
-    if (msg.fileUrl) text = "📎 Sent you a new file";
+    if (msg.fileUrl) text = "📎 ሓድሽ ፋይል ተላኢኽሎም ኣሎ ";
 
-    await notifyUser(msg.to, "💬 New Message", text);
+    await notifyUser(msg.to, "💬 ሓድሽ መልእኽቲ", text);
   });
 });
 
@@ -221,9 +221,9 @@ db.ref("/payments").on("child_changed", async (snap) => {
   if (!payment || !payment.patientId) return;
 
   if (payment.status === "approved") {
-    await notifyUser(payment.patientId, "💰 Payment Approved", "Your payment has been successfully approved!");
+    await notifyUser(payment.patientId, "💰 ክፍሊቶም ተቀቢልናዮ ኣለና።", "💰 የቐንየልና! ክፍሊቶም ተቀቢልናዮ ኣለና።");
   } else if (payment.status === "rejected") {
-    await notifyUser(payment.patientId, "⚠️ Payment Rejected", "Your payment was rejected. Please contact support.");
+    await notifyUser(payment.patientId, "⚠️ ክፍሊቶም ኣይተቀበልናዮን።, "ንዝህልዎም ቅሬታ በይዘኦም ይደውሉልና 09 86 20 35 85/ 09 14 01 77 ");
   } else {
     await notifyUser(payment.patientId, "💰 Payment Update", `Your payment status is now ${payment.status || "updated"}.`);
   }
