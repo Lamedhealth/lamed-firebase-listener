@@ -213,37 +213,36 @@ db.ref("/chats").on("child_added", (chatSnap) => {
 // ----------------------------
 // 🔟 Payment Updates (fixed for your structure)
 // ----------------------------
-let paymentsLoaded = false;
-db.ref("/payments").once("value").then(() => (paymentsLoaded = true));
+let appointmentsLoaded = false;
+db.ref("/appointments").once("value").then(() => (appointmentsLoaded = true));
 
-db.ref("/payments").on("child_changed", async (snap) => {
-  if (!paymentsLoaded) return;
-  const payment = snap.val();
-  if (!payment || !payment.patientId) return;
+const handlePayment = async (appointment) => {
+  if (!appointment || !appointment.patientId) return;
 
-  const status = payment.paymentStatus?.toLowerCase() || payment.status?.toLowerCase();
+  const status = (appointment.paymentStatus || appointment.status || "").toLowerCase();
 
-  if (status === "paid" || status === "approved" || status === "confirmed") {
+  if (status === "paid" || status === "confirmed") {
     await notifyUser(
-      payment.patientId,
+      appointment.patientId,
       "💰 ክፍሊቶም ተቀቢልናዮ ኣለና።",
       "💰 የቐንየልና! ክፍሊቶም ተቀቢልናዮ ኣለና።"
     );
   } else if (status === "rejected" || status === "failed" || status === "declined") {
     await notifyUser(
-      payment.patientId,
+      appointment.patientId,
       "⚠️ ክፍሊቶም ኣይተቀበልናዮን።",
       "ንዝህልዎም ቅሬታ በይዘኦም ይደውሉልና 0986203585 / 0914017765"
     );
-  } else {
-    await notifyUser(
-      payment.patientId,
-      "💰 ናይ ክፍሊት ሕቶ",
-      `ናይ ክፍሊቶም ኹነታት፡ ${status || "updated"}`
-    );
   }
-});
+};
 
+// Listen for updates to appointment payments
+db.ref("/appointments").on("child_changed", async (snap) => {
+  if (!appointmentsLoaded) return;
+  const appointment = snap.val();
+  console.log("💰 Appointment changed:", appointment);
+  await handlePayment(appointment);
+});
 // ----------------------------
 // 🔹 Minimal HTTP Server
 // ----------------------------
