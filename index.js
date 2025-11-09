@@ -94,7 +94,7 @@ const createChildAddedListener = (ref, callback) => {
 };
 
 // ----------------------------
-// 7️⃣ Appointment Reminder Scheduler (20 & 10 min)
+// 7️⃣ Appointment Reminder Scheduler
 // ----------------------------
 const checkUpcomingAppointments = async () => {
   try {
@@ -278,11 +278,15 @@ db.ref("/appointments").on("child_changed", async (snap) => {
 // 🔹 Minimal HTTP Server (keep alive on Render)
 // ----------------------------
 const PORT = process.env.PORT || 3000;
-http
-  .createServer((req, res) => {
+
+http.createServer((req, res) => {
+  if (req.url === "/ping") {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("Pong! Service is alive.\n");
+  } else {
     res.writeHead(200, { "Content-Type": "text/plain" });
     res.end("Firebase listener is running.\n");
-  })
-  .listen(PORT, () => console.log(`🌐 Web service listening on port ${PORT}`));
+  }
+}).listen(PORT, () => console.log(`🌐 Web service listening on port ${PORT}`));
 
 console.log("👂 Listening to Firebase Realtime Database...");
