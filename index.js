@@ -54,7 +54,8 @@ const sendNotificationViaWorker = async (playerId, title, message) => {
 const getPlayerId = async (userId) => {
   if (!userId) return null;
   try {
-    const snap = await db.ref(`/users/${userId}/oneSignalPlayerId`).once("value");
+    const snap = await db.ref(`/users/${userId}/oneSignalPlayerId`).once("value"); // ensure key matches Flutter
+
     return snap.val();
   } catch (e) {
     console.error(`❌ Error fetching Player ID for ${userId}`, e);
